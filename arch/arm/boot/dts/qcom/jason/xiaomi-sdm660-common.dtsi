@@ -305,9 +305,12 @@
 /* Red led was used for powersupply of White led */
 &red_led {
 	linux,name = "white";
-	qcom,duty-pcts =
-			[01 03 05 07 0a 0d 10 13 16 19 1c
-			1c 19 16 13 10 0d 0a 07 05 03 01];
+	qcom,duty-pcts = [ 00 0E 1C 2A 38 46 54 64 ];
+	qcom,idx-len = <8>;
+	qcom,pause-lo = <500>;
+	qcom,pause-hi = <500>;
+	qcom,ramp-step-ms = <50>;
+	qcom,lut-flags = <31>; /* loop, ramp up, reverse, pause hi, pause lo */
 };
 
 &pm660_vadc {
