@@ -349,6 +349,8 @@ static void gf_kernel_key_input(struct gf_dev *gf_dev, struct gf_key *gf_key)
 	}
 }
 
+extern bool capacitive_keys_enabled;
+
 static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct gf_dev *gf_dev = &gf;
@@ -408,8 +410,8 @@ static long gf_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			retval = -EFAULT;
 			break;
 		}
-
-		gf_kernel_key_input(gf_dev, &gf_key);
+		if (capacitive_keys_enabled)
+			gf_kernel_key_input(gf_dev, &gf_key);
 		break;
 #if defined(SUPPORT_NAV_EVENT)
 	case GF_IOC_NAV_EVENT:
