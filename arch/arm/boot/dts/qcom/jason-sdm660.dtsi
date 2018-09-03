@@ -408,13 +408,11 @@
 };
 
 
-/{
-	firmware: firmware {
-		android {
-			fstab {
-				vendor {
-					status = "disabled";
-				};
+&firmware {
+	android {
+		fstab {
+			vendor {
+				status = "disabled";
 			};
 		};
 	};
