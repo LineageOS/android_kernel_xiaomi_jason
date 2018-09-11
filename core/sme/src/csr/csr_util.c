@@ -3148,16 +3148,7 @@ static bool csr_lookup_pmkid_using_ssid(tpAniSirGlobal mac,
 	return false;
 }
 
-/**
- * csr_lookup_pmkid_using_bssid() - lookup pmkid using bssid
- * @mac: pointer to mac
- * @session: sme session pointer
- * @pmk_cache: pointer to pmk cache
- * @index: index value needs to be seached
- *
- * Return: true if pmkid is found else false
- */
-static bool csr_lookup_pmkid_using_bssid(tpAniSirGlobal mac,
+bool csr_lookup_pmkid_using_bssid(tpAniSirGlobal mac,
 					tCsrRoamSession *session,
 					tPmkidCacheInfo *pmk_cache,
 					uint32_t *index)
@@ -3426,6 +3417,18 @@ uint8_t csr_construct_rsn_ie(tHalHandle hHal, uint32_t sessionId,
 			qdf_mem_copy(pPMK->PMKIDList[0].PMKID,
 				     pmkid_cache.PMKID,
 				     CSR_RSN_PMKID_SIZE);
+
+			/*
+			 * If a PMK cache is found for the BSSID, then
+			 * update the PMK in CSR session also as this
+			 * will be sent to the FW during RSO.
+			 */
+			session->pmk_len = pmkid_cache.pmk_len;
+			qdf_mem_zero(session->psk_pmk,
+				     sizeof(session->psk_pmk));
+			qdf_mem_copy(session->psk_pmk, pmkid_cache.pmk,
+				     session->pmk_len);
+
 			csr_update_pmksa_to_profile(pProfile, &pmkid_cache);
 		} else {
 			pPMK->cPMKIDs = 0;
