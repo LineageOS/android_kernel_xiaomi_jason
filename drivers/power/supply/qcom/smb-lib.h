@@ -1,4 +1,5 @@
 /* Copyright (c) 2016-2017 The Linux Foundation. All rights reserved.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -18,6 +19,9 @@
 #include <linux/regulator/driver.h>
 #include <linux/regulator/consumer.h>
 #include <linux/extcon.h>
+#include <linux/gpio.h>
+#include <linux/of_gpio.h>
+#include <linux/power/charge_log.h>
 #include "storm-watch.h"
 
 enum print_reason {
@@ -26,7 +30,17 @@ enum print_reason {
 	PR_MISC		= BIT(2),
 	PR_PARALLEL	= BIT(3),
 	PR_OTG		= BIT(4),
+	PR_OEM		= BIT(5),
 };
+
+#undef pr_err
+#define pr_err charge_logs_err
+
+#undef pr_info
+#define pr_info charge_logs_info
+
+#undef dev_err
+#define dev_err charge_dev_err
 
 #define DEFAULT_VOTER			"DEFAULT_VOTER"
 #define USER_VOTER			"USER_VOTER"
@@ -68,11 +82,37 @@ enum print_reason {
 #define WBC_VOTER			"WBC_VOTER"
 #define OV_VOTER			"OV_VOTER"
 #define FCC_STEPPER_VOTER		"FCC_STEPPER_VOTER"
+#define CHG_AWAKE_VOTER			"CHG_AWAKE_VOTER"
+#define MAIN_ICL_BEFORE_DUAL_CHARGE		"MAIN_ICL_BEFORE_DUAL_CHARGE"
+#define PL_HIGH_CAPACITY_VOTER			"PL_HIGH_CAPACITY_VOTER"
+#define CC_FLOAT_VOTER		"CC_FLOAT_VOTER"
+#define PL_JEITA_VOTER			"PL_JEITA_VOTER"
+#define JEITA_AWAKE_VOTER		"JEITA_AWAKE_VOTER"
+#define PL_LOW_ICL_VOTER		"PL_LOW_ICL_VOTER"
 
 #define VCONN_MAX_ATTEMPTS	3
 #define OTG_MAX_ATTEMPTS	3
 #define BOOST_BACK_STORM_COUNT	3
 #define WEAK_CHG_STORM_COUNT	8
+#define CHG_MONITOR_WORK_DELAY_MS		30000
+#define CHG_MONITOR_START_DELAY_MS		15000
+#define CC_FLOAT_WORK_START_DELAY_MS	700
+/* High HVDCP voltage threshold 10V */
+#define HIGH_HVDCP_VOL_UV_THR		10000000
+/* boost charge ibat monitor work micros*/
+#define BOOST_MONITOR_WORK_DELAY_MS		20000
+#define IBAT_HIGH_FIRST_CHECK_COUNT_MAX		3
+#define IBAT_HIGH_DOUBLE_CHECK_COUNT_MAX	6
+#define LOW_CAPACITY_THR		10
+#define HIGH_OTG_ICL_UA		1250000
+#define MEDIUM_OTG_ICL_UA		1000000
+#define LOW_OTG_ICL_UA		750000
+#define TOO_HIGH_IBAT_THR_UA		3450000
+#define RECOVERY_IBAT_THR_UA		2400000
+/* pd icl pl_disable threshold */
+#define PD_ICL_LOW_THR_UA		1500000
+/* cutoff voltage threshold */
+#define CUTOFF_VOL_THR		3400000
 
 enum smb_mode {
 	PARALLEL_MASTER = 0,
@@ -276,6 +316,7 @@ struct smb_charger {
 	struct smb_regulator	*vbus_vreg;
 	struct smb_regulator	*vconn_vreg;
 	struct regulator	*dpdm_reg;
+	struct regulator	*usbvdd_reg;
 
 	/* votables */
 	struct votable		*dc_suspend_votable;
@@ -310,6 +351,10 @@ struct smb_charger {
 	struct work_struct	legacy_detection_work;
 	struct delayed_work	uusb_otg_work;
 	struct delayed_work	bb_removal_work;
+	struct delayed_work	reg_work;
+	struct delayed_work	monitor_charging_work;
+	struct delayed_work	cc_float_charge_work;
+	struct delayed_work	monitor_boost_charge_work;
 
 	/* cached status */
 	int			voltage_min_uv;
@@ -319,7 +364,14 @@ struct smb_charger {
 	int			boost_threshold_ua;
 	int			system_temp_level;
 	int			thermal_levels;
+#ifdef CONFIG_FB
+	int			*thermal_mitigation_dcp;
+	int			*thermal_mitigation_qc3;
+	int			*thermal_mitigation_qc2;
+	int			*thermal_mitigation_pd_base;
+#else
 	int			*thermal_mitigation;
+#endif
 	int			dcp_icl_ua;
 	int			fake_capacity;
 	bool			step_chg_enabled;
@@ -348,14 +400,28 @@ struct smb_charger {
 	bool			use_extcon;
 	bool			otg_present;
 	bool			fcc_stepper_mode;
+	bool			boost_charge_support;
+	bool			otg_icl_setted;
+	bool			ibat_high_first_check;
+	bool			ibat_high_double_check;
+	bool			disable_try_snk;
+	bool			need_soft_charge_done;
+	bool			report_charging_when_jeita_change;
+	bool			report_usb_absent;
 
 	/* workaround flag */
 	u32			wa_flags;
 	bool			cc2_detach_wa_active;
 	bool			typec_en_dis_active;
 	bool			try_sink_active;
+	bool			unstandard_qc_detected;
+	bool			cc_float_detected;
+	bool			soft_charge_done;
+	bool			float_rerun_apsd;
 	int			boost_current_ua;
 	int			temp_speed_reading_count;
+	int			soft_terminate_count;
+	int			boost_ibat_high_count;
 
 	/* extcon for VBUS / ID notification to USB for uUSB */
 	struct extcon_dev	*extcon;
@@ -363,10 +429,18 @@ struct smb_charger {
 	/* battery profile */
 	int			batt_profile_fcc_ua;
 	int			batt_profile_fv_uv;
+	/* jeita related */
+	int			critical_low_fcc_ua;
+	int			normal_cool_fcc_ua;
+	int			cool_fcc_ua;
+	int			warm_fcc_ua;
 
 	/* qnovo */
 	int			usb_icl_delta_ua;
 	int			pulse_cnt;
+	/* reverse boost feature gpios */
+	unsigned int		boost_en_gpio;
+	unsigned int		sw_usb_en_gpio;
 };
 
 int smblib_read(struct smb_charger *chg, u16 addr, u8 *val);
@@ -406,6 +480,7 @@ irqreturn_t smblib_handle_chg_state_change(int irq, void *data);
 irqreturn_t smblib_handle_batt_temp_changed(int irq, void *data);
 irqreturn_t smblib_handle_batt_psy_changed(int irq, void *data);
 irqreturn_t smblib_handle_usb_psy_changed(int irq, void *data);
+irqreturn_t smblib_handle_usbin_collapse(int irq, void *data);
 irqreturn_t smblib_handle_usbin_uv(int irq, void *data);
 irqreturn_t smblib_handle_usb_plugin(int irq, void *data);
 irqreturn_t smblib_handle_usb_source_change(int irq, void *data);
@@ -527,7 +602,12 @@ int smblib_get_prop_from_bms(struct smb_charger *chg,
 int smblib_set_prop_pr_swap_in_progress(struct smb_charger *chg,
 				const union power_supply_propval *val);
 void smblib_usb_typec_change(struct smb_charger *chg);
+int smblib_set_prop_rerun_apsd(struct smb_charger *chg,
+				const union power_supply_propval *val);
 
 int smblib_init(struct smb_charger *chg);
 int smblib_deinit(struct smb_charger *chg);
+/* this function is used for rapid plug in/out charger to notify policy engine to update typec mode */
+extern void notify_typec_mode_changed_for_pd(void);
+
 #endif /* __SMB2_CHARGER_H */
