@@ -1853,10 +1853,10 @@ static void synaptics_rmi4_report_key(struct synaptics_rmi4_data *rmi4_data,
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_REVERSED_KEYS_FORCE
 	if (key == KEY_MENU)
 		input_report_key(rmi4_data->input_dev,
-				rmi4_data->enable_reversed_keys ? KEY_MENU : KEY_BACK, status);
+				rmi4_data->enable_reversed_keys ? KEY_BACK : KEY_MENU, status);
 	else if (key == KEY_BACK)
 		input_report_key(rmi4_data->input_dev,
-				rmi4_data->enable_reversed_keys ? KEY_BACK : KEY_MENU, status);
+				rmi4_data->enable_reversed_keys ? KEY_MENU : KEY_BACK, status);
 	else
 #endif
 		input_report_key(rmi4_data->input_dev, key, status);
