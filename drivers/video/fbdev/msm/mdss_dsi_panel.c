@@ -1,4 +1,5 @@
 /* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2018 XiaoMi, Inc.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -32,7 +33,40 @@
 
 #define VSYNC_DELAY msecs_to_jiffies(17)
 
+#define PANEL_DIMMING_ON_CMD 0xF00
+#define DISPLAY_OFF_MODE 0x60000
+#define DISPLAY_ON_MODE 0x70000
+
+#define PANEL_READ_CNT    32
+#define XY_COORDINATE_NUM    3
+
 DEFINE_LED_TRIGGER(bl_led_trigger);
+static bool mdss_panel_reset_skip;
+static struct mdss_panel_info *mdss_pinfo;
+
+bool mdss_prim_panel_is_dead(void)
+{
+	if (mdss_pinfo)
+		return mdss_pinfo->panel_dead;
+	return false;
+}
+
+void mdss_panel_reset_skip_enable(bool enable)
+{
+	mdss_panel_reset_skip = enable;
+}
+
+void mdss_dsi_ulps_enable(bool enable)
+{
+	if (mdss_pinfo)
+		mdss_pinfo->ulps_feature_enabled = enable;
+}
+
+void mdss_dsi_ulps_suspend_enable(bool enable)
+{
+	if (mdss_pinfo)
+		mdss_pinfo->ulps_suspend_enabled = enable;
+}
 
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
 {
@@ -124,6 +158,17 @@ static void mdss_dsi_panel_bklt_pwm(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 				ret);
 		ctrl->pwm_enabled = 1;
 	}
+}
+
+static char rbuf[PANEL_READ_CNT];
+static void mdss_dsi_dcs_read_cb(u32 cb_result)
+{
+	u32 i;
+
+	pr_info("%s: 0x%x. \n", __func__, cb_result);
+	for (i = 0; i < cb_result; i++)
+		pr_debug("0x%x ", rbuf[i]);
+	pr_debug("\n");
 }
 
 static char dcs_cmd[2] = {0x54, 0x00}; /* DTYPE_DCS_READ */
@@ -387,6 +432,18 @@ int mdss_dsi_panel_reset(struct mdss_panel_data *pdata, int enable)
 				panel_data);
 
 	pinfo = &(ctrl_pdata->panel_data.panel_info);
+
+	/* For TDDI ddic panel, LCD shares reset pin with touch.
+	 * If gesture wakeup feature is enabled, the reset pin
+	 * should be controlled by touch. In this case, reset pin
+	 * would keep high state when panel is off. Meanwhile,
+	 * reset action would be done by touch when panel is on.
+	 */
+	if (mdss_panel_reset_skip && !pinfo->panel_dead) {
+		pr_info("%s: panel reset skip\n", __func__);
+		return rc;
+	}
+
 	if ((mdss_dsi_is_right_ctrl(ctrl_pdata) &&
 		mdss_dsi_is_hw_config_split(ctrl_pdata->shared_data)) ||
 			pinfo->is_dba_panel) {
@@ -758,6 +815,80 @@ end:
 	return 0;
 }
 
+static void value2str(char *pbuf, char read_cnt, int bit_valide)
+{
+	int i = 0;
+	int param_nb = 0;
+	int write_len = 0;
+	char *pTemp = pbuf;
+
+	/* pbuf - buffer size must >= 256 */
+	for (i = 0; i < read_cnt; i++) {
+		if (bit_valide & 0x1 && ((pTemp + 8) < (pbuf + BUF_LEN_MAX))) {
+			write_len = scnprintf(pTemp, 8, "p%d=%d", param_nb, rbuf[i]);
+			pTemp += write_len;
+			param_nb++;
+		}
+		bit_valide = bit_valide >> 1;
+	}
+	pr_info("read %s  from panel\n", pbuf);
+}
+
+static inline void mdss_panel_disparam_set(struct mdss_dsi_ctrl_pdata *ctrl, uint32_t param)
+{
+	int ret = 0;
+	uint32_t temp = 0;
+
+	temp = param & 0x0000000F;
+	switch (temp) {
+	case 0xe:
+		if (ctrl->xy_coordinate_cmds.cmd && ctrl->xy_coordinate_cmds.param_num < PANEL_READ_CNT) {
+			ret = mdss_dsi_panel_cmd_read(ctrl, ctrl->xy_coordinate_cmds.cmd, 0x00,
+						(void *)mdss_dsi_dcs_read_cb, rbuf, ctrl->xy_coordinate_cmds.param_num);
+			if (ret > 0 && ret < PANEL_READ_CNT) {
+				pr_info("read %d bytes from panel, read_cnt:%d\n", ret, ctrl->xy_coordinate_cmds.param_num);
+				value2str(ctrl->panel_read_data, ret, ctrl->xy_coordinate_cmds.params_bit);
+			}
+		}
+
+		pr_info("read panel command:0x%x, count:%d\n", ctrl->xy_coordinate_cmds.cmd, ctrl->xy_coordinate_cmds.param_num);
+		break;
+
+	default:
+		break;
+	}
+
+	temp = param & 0x000F0000;
+	switch (temp) {
+	case DISPLAY_OFF_MODE:
+		if (ctrl->displayoff_cmds.cmd_cnt) {
+			pr_info("display off mode\n");
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->displayoff_cmds, CMD_REQ_COMMIT);
+		}
+		break;
+	case DISPLAY_ON_MODE:
+		if (ctrl->displayon_cmds.cmd_cnt) {
+			pr_info("display on mode\n");
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->displayon_cmds, CMD_REQ_COMMIT);
+		}
+		break;
+	default:
+		break;
+	}
+
+	temp = param & 0x00000F00;
+	switch (temp) {
+	case 0xF00:		/*dimming*/
+		if (ctrl->dispparam_dimmingon_cmds.cmd_cnt) {
+			pr_info("dimmingon\n");
+			mdss_dsi_panel_cmds_send(ctrl, &ctrl->dispparam_dimmingon_cmds, CMD_REQ_COMMIT);
+		}
+		break;
+	default:
+		break;
+	}
+}
+
 static int mdss_dsi_panel_apply_display_setting(struct mdss_panel_data *pdata,
 							u32 mode)
 {
@@ -874,6 +1005,17 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 	if ((bl_level < pdata->panel_info.bl_min) && (bl_level != 0))
 		bl_level = pdata->panel_info.bl_min;
 
+	if (bl_level == 0) {
+		pr_debug("%s: set display off when bl_level=0\n", __func__);
+		mdss_panel_disparam_set(ctrl_pdata, DISPLAY_OFF_MODE);
+		ctrl_pdata->dsi_panel_off_mode = true;
+	} else {
+		if (ctrl_pdata->bklt_level == 0 && ctrl_pdata->dsi_panel_off_mode == true) {
+			pr_debug("%s: set display on when bklt_level=0\n", __func__);
+			mdss_panel_disparam_set(ctrl_pdata, DISPLAY_ON_MODE);
+		}
+	}
+
 	/* enable the backlight gpio if present */
 	mdss_dsi_bl_gpio_ctrl(pdata, bl_level);
 
@@ -913,6 +1055,20 @@ static void mdss_dsi_panel_bl_ctrl(struct mdss_panel_data *pdata,
 			__func__);
 		break;
 	}
+
+	if (ctrl_pdata->bklt_level == 0 && bl_level) {
+		if (pdata->panel_info.panel_on_dimming_delay)
+			schedule_delayed_work(&ctrl_pdata->cmds_work,
+				msecs_to_jiffies(pdata->panel_info.panel_on_dimming_delay));
+	}
+	ctrl_pdata->bklt_level = bl_level;
+}
+
+static void panelon_dimming_enable_delayed_work(struct work_struct *work)
+{
+	struct mdss_dsi_ctrl_pdata *ctrl = container_of(work,
+				struct mdss_dsi_ctrl_pdata, cmds_work.work);
+	mdss_panel_disparam_set(ctrl, PANEL_DIMMING_ON_CMD);
 }
 
 static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
@@ -950,6 +1106,9 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	if (on_cmds->cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, on_cmds, CMD_REQ_COMMIT);
 
+	if (!pinfo->panel_on_dimming_delay)
+		mdss_panel_disparam_set(ctrl, PANEL_DIMMING_ON_CMD);
+
 	if (pinfo->compression_mode == COMPRESSION_DSC)
 		mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
 
@@ -958,6 +1117,8 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 
 	/* Ensure low persistence mode is set as before */
 	mdss_dsi_panel_apply_display_setting(pdata, pinfo->persist_mode);
+
+	ctrl->dsi_panel_off_mode = false;
 
 end:
 	pr_debug("%s:-\n", __func__);
@@ -1018,6 +1179,8 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 				panel_data);
 
 	pr_debug("%s: ctrl=%pK ndx=%d\n", __func__, ctrl, ctrl->ndx);
+
+	cancel_delayed_work_sync(&ctrl->cmds_work);
 
 	if (pinfo->dcs_cmd_by_left) {
 		if (ctrl->ndx != DSI_CTRL_LEFT)
@@ -2029,6 +2192,24 @@ static void mdss_dsi_parse_esd_params(struct device_node *np,
 	struct property *data;
 	const char *string;
 	struct mdss_panel_info *pinfo = &ctrl->panel_data.panel_info;
+	enum of_gpio_flags esd_interrupt_flags = 0;
+
+	pinfo->esd_err_irq = 0;
+	pinfo->esd_err_irq_gpio = of_get_named_gpio_flags(np,
+		"qcom,esd-err-irq-gpio", 0, &esd_interrupt_flags);
+	pinfo->esd_interrupt_flags = (u32)esd_interrupt_flags;
+
+	if (gpio_is_valid(pinfo->esd_err_irq_gpio)) {
+		pinfo->esd_err_irq = gpio_to_irq(pinfo->esd_err_irq_gpio);
+
+		rc = gpio_request(pinfo->esd_err_irq_gpio, "esd_err_irq_gpio");
+		if (rc) {
+			pr_err("%s: Failed to get gpio %d (code: %d)",
+				__func__, pinfo->esd_err_irq_gpio, rc);
+		} else {
+			gpio_direction_input(pinfo->esd_err_irq_gpio);
+		}
+	}
 
 	pinfo->esd_check_enabled = of_property_read_bool(np,
 		"qcom,esd-check-enabled");
@@ -2708,7 +2889,7 @@ static int mdss_panel_parse_dt(struct device_node *np,
 			struct mdss_dsi_ctrl_pdata *ctrl_pdata)
 {
 	u32 tmp;
-	int rc, len = 0;
+	int xy_coordinate[XY_COORDINATE_NUM], rc, len = 0;
 	const char *data;
 	static const char *pdest;
 	const char *bridge_chip_name;
@@ -2922,6 +3103,25 @@ static int mdss_panel_parse_dt(struct device_node *np,
 	pinfo->mipi.force_clk_lane_hs = of_property_read_bool(np,
 		"qcom,mdss-dsi-force-clock-lane-hs");
 
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->dispparam_dimmingon_cmds,
+		"qcom,mdss-dsi-dispparam-dimmingon-command", "qcom,mdss-dsi-dispparam-dimmingon-command-state");
+
+	rc = of_property_read_u32_array(np, "qcom,mdss-dsi-panel-xy-coordinate", xy_coordinate, XY_COORDINATE_NUM);
+	if (rc) {
+		pr_debug("%s:%d, Unable to read panel xy coordinate\n",
+		       __func__, __LINE__);
+	} else {
+		ctrl_pdata->xy_coordinate_cmds.cmd = xy_coordinate[0];
+		ctrl_pdata->xy_coordinate_cmds.param_num = xy_coordinate[1];
+		ctrl_pdata->xy_coordinate_cmds.params_bit = xy_coordinate[2];
+	}
+
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->displayoff_cmds,
+		"qcom,mdss-dsi-displayoff-command", "qcom,mdss-dsi-displayoff-command-state");
+
+	mdss_dsi_parse_dcs_cmds(np, &ctrl_pdata->displayon_cmds,
+		"qcom,mdss-dsi-displayon-command", "qcom,mdss-dsi-displayon-command-state");
+
 	rc = mdss_dsi_parse_panel_features(np, ctrl_pdata);
 	if (rc) {
 		pr_err("%s: failed to parse panel features\n", __func__);
@@ -2977,6 +3177,7 @@ int mdss_dsi_panel_init(struct device_node *node,
 	}
 
 	pinfo = &ctrl_pdata->panel_data.panel_info;
+	mdss_pinfo = pinfo;
 
 	pr_debug("%s:%d\n", __func__, __LINE__);
 	pinfo->panel_name[0] = '\0';
@@ -2993,6 +3194,15 @@ int mdss_dsi_panel_init(struct device_node *node,
 		pr_err("%s:%d panel dt parse failed\n", __func__, __LINE__);
 		return rc;
 	}
+
+	INIT_DELAYED_WORK(&ctrl_pdata->cmds_work, panelon_dimming_enable_delayed_work);
+
+	rc = of_property_read_u32(node, "qcom,mdss-panel-on-dimming-delay", &pinfo->panel_on_dimming_delay);
+	if (rc) {
+		pinfo->panel_on_dimming_delay = 0;
+		pr_info("Panel on dimming delay disabled\n");
+	} else
+		pr_info("Panel on dimming delay %d ms\n", pinfo->panel_on_dimming_delay);
 
 	pinfo->dynamic_switch_pending = false;
 	pinfo->is_lpm_mode = false;
