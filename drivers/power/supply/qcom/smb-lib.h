@@ -404,7 +404,6 @@ struct smb_charger {
 	bool			otg_icl_setted;
 	bool			ibat_high_first_check;
 	bool			ibat_high_double_check;
-	bool			disable_try_snk;
 	bool			need_soft_charge_done;
 	bool			report_charging_when_jeita_change;
 	bool			report_usb_absent;
