@@ -417,9 +417,6 @@ static int smb2_parse_dt(struct smb2 *chip)
 
 	chg->micro_usb_mode = of_property_read_bool(node, "qcom,micro-usb");
 
-	chg->disable_try_snk = of_property_read_bool(node,
-				"qcom,disable-try-sink");
-
 	chg->need_soft_charge_done = of_property_read_bool(node,
 				"qcom,need-soft-done");
 
@@ -1536,24 +1533,13 @@ static int smb2_configure_typec(struct smb_charger *chg)
 		return rc;
 	}
 
-	if (chg->disable_try_snk) {
-		/* disable try.SINK mode and legacy cable IRQs for E4 */
-		rc = smblib_masked_write(chg, TYPE_C_CFG_3_REG, EN_TRYSINK_MODE_BIT |
-					TYPEC_NONCOMPLIANT_LEGACY_CABLE_INT_EN_BIT |
-					TYPEC_LEGACY_CABLE_INT_EN_BIT, 0);
-		if (rc < 0) {
-			dev_err(chg->dev, "Couldn't set Type-C config rc=%d\n", rc);
-			return rc;
-		}
-	} else {
-		/* enable try.SINK mode for C8 and D2T and disable legacy cable IRQs*/
-		rc = smblib_masked_write(chg, TYPE_C_CFG_3_REG, EN_TRYSINK_MODE_BIT |
-					TYPEC_NONCOMPLIANT_LEGACY_CABLE_INT_EN_BIT |
-					TYPEC_LEGACY_CABLE_INT_EN_BIT, EN_TRYSINK_MODE_BIT);
-		if (rc < 0) {
-			dev_err(chg->dev, "Couldn't set Type-C config rc=%d\n", rc);
-			return rc;
-		}
+	/* disable try.SINK mode and legacy cable IRQs */
+	rc = smblib_masked_write(chg, TYPE_C_CFG_3_REG, EN_TRYSINK_MODE_BIT |
+				TYPEC_NONCOMPLIANT_LEGACY_CABLE_INT_EN_BIT |
+				TYPEC_LEGACY_CABLE_INT_EN_BIT, 0);
+	if (rc < 0) {
+		dev_err(chg->dev, "Couldn't set Type-C config rc=%d\n", rc);
+		return rc;
 	}
 
 	return rc;
