@@ -1537,7 +1537,9 @@ enable_supply:
 		wcd_mbhc_update_fsm_source(mbhc, plug_type);
 	else {
 		if ((mbhc->impedance_detect) && !hs_record_active) {
+			WCD_MBHC_RSC_LOCK(mbhc);
 			mbhc->mbhc_cb->compute_impedance(mbhc, &mbhc->zl, &mbhc->zr);
+			WCD_MBHC_RSC_UNLOCK(mbhc);
 			if ((mbhc->zl > 20000) && (mbhc->zr > 20000)) {
 				pr_debug("%s: Selfie stick device, need enable btn isrc ctrl", __func__);
 				wcd_enable_mbhc_supply(mbhc, MBHC_PLUG_TYPE_HEADSET);
