@@ -213,8 +213,7 @@
 
 &pm660_haptics {
        status = "okay";
-       qcom,wave-play-rate-us = <4878>;
-       qcom,vmax-mv = <2900>;
+       qcom,wave-play-rate-us = <5000>;
        qcom,wave-shape = "sine";
        qcom,brake-pattern = [03 02 00 00];
        qcom,disable_force_back_emf_delay;
