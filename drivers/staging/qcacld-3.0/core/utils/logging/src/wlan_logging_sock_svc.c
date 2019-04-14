@@ -47,6 +47,7 @@
 	((QDF_TRACE_LEVEL_FATAL == (level)) || \
 	 (QDF_TRACE_LEVEL_ERROR == (level)) || \
 	 (QDF_TRACE_LEVEL_WARN == (level)) || \
+	 (QDF_TRACE_LEVEL_DEBUG == (level)) || \
 	 (QDF_TRACE_LEVEL_INFO == (level)))
 
 /**
